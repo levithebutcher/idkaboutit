@@ -75,7 +75,7 @@ _AD_HOSTS = (
     # Google analytics, tags & tracking
     "googletagmanager.com", "google-analytics.com", "analytics.google.com",
     "googleadservices.com", "googlesyndication.com", "doubleclick.net",
-    "gstatic.com", "googleapis.com", "google.com", "youtube.com", "ytimg.com",
+    "adservice.google.com",
     # Ad networks
     "taboola.com", "outbrain.com", "adsterra.com", "propellerads.com",
     "popads.net", "popcash.net", "exoclick.com", "juicyads.com",
@@ -84,14 +84,10 @@ _AD_HOSTS = (
     "pubmatic.com", "openx.net", "appnexus.com", "amazon-adsystem.com",
     "scorecardresearch.com", "quantserve.com", "moatads.com", "casalemedia.com",
     "bidswitch.net", "smartadserver.com", "yieldmo.com", "inmobi.com",
-    # Social & messaging
-    "facebook.com", "fbcdn.net", "twitter.com", "x.com", "t.co",
-    "instagram.com", "t.me", "telegram.org", "whatsapp.com", "discord.gg",
-    # CDNs and infrastructure
-    "cloudflare.com", "challenges.cloudflare.com", "cloudfront.net",
-    "jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "sentry.io",
-    "w3.org", "schema.org",
-    # Intermediate shortener mirror domains
+    "ad-server.linkvertise.com", "integrate.linkvertise.com",
+    # Bot challenges / trackers
+    "challenges.cloudflare.com",
+    # Intermediate shortener mirror domains (never final destination)
     "best-links.org", "best-link.org", "speedy.link", "speedy-links.com",
     "speedy-link.com", "speedy-links.net", "linkvertise.com", "linkvertise.net",
     "link-to.net", "up-to-down.net", "direct-link.net", "file-upload.net",
@@ -174,7 +170,25 @@ class BrowserResolver(BaseResolver):
 
             async def on_response(response):
                 try:
-                    # Linkvertise target payload
+                    # Linkvertise GraphQL target payload
+                    if "publisher.linkvertise.com/graphql" in response.url:
+                        res_data = await response.json()
+                        if isinstance(res_data, dict):
+                            # DetailPageTargetData from getContent
+                            gc = res_data.get("data", {}).get("getContent", {})
+                            if isinstance(gc, dict):
+                                t = gc.get("url") or gc.get("paste")
+                                if t and isinstance(t, str) and self._looks_like_target(t, domain):
+                                    intercepted_targets.append(t)
+                                    return
+                            # linkByIdentifier paste / target
+                            lbi = res_data.get("data", {}).get("linkByIdentifier", {})
+                            if isinstance(lbi, dict):
+                                if lbi.get("target_type") == "paste" and lbi.get("raw"):
+                                    intercepted_targets.append(lbi["raw"])
+                                    return
+
+                    # Linkvertise classic target payload
                     if "publisher.linkvertise.com/api/v1/redirect/link" in response.url:
                         res_data = await response.json()
                         if isinstance(res_data, dict):
@@ -319,7 +333,20 @@ class BrowserResolver(BaseResolver):
 
     async def _dismiss_consent_dialogs(self, page: Page) -> None:
         """Dismiss GDPR / Cookie consent popups (e.g. on Linkvertise)."""
+        # Remove InMobi / Quantcast overlay directly via DOM
+        try:
+            await page.evaluate("""() => {
+                document.querySelector('.qc-cmp2-container')?.remove();
+                document.querySelector('#qc-cmp2-ui')?.remove();
+                if (document.body) document.body.style.overflow = 'auto';
+            }""")
+        except Exception:
+            pass
+
         consent_selectors = [
+            ".qc-cmp2-summary-buttons button[mode='primary']",
+            ".qc-cmp2-summary-buttons button:has-text('AGREE')",
+            "#qc-cmp2-ui button:has-text('AGREE')",
             "button:has-text('AGREE')",
             "button:has-text('I agree')",
             "button:has-text('Accept All')",
@@ -338,13 +365,17 @@ class BrowserResolver(BaseResolver):
                 pass
 
     async def _click_linkvertise_access(self, page: Page) -> None:
-        """Handle Linkvertise 'Free Access with Ads' & Discovery Modals."""
-        # Free Access button
+        """Handle Linkvertise 'Get access', 'Free Access with Ads' & Discovery Modals."""
         access_selectors = [
+            "button:has-text('Get access')",
+            "a:has-text('Get access')",
             "button:has-text('Free Access')",
             "div:has-text('Free Access with Ads')",
             "button:has-text('Direct Access')",
             "a:has-text('Free Access')",
+            "button:has-text('Free Access with Ads')",
+            "button:has-text('Skip Ad')",
+            "button:has-text('I have read')",
         ]
         for sel in access_selectors:
             try:

@@ -106,7 +106,7 @@ class LinkvertiseAPIResolver(BaseResolver):
                 "Accept": "application/json",
             }
             static_api = f"{_API_BASE}/static{link_path}"
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
                 resp = await client.get(static_api, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -127,7 +127,49 @@ class LinkvertiseAPIResolver(BaseResolver):
         except Exception as exc:
             logger.debug("AppleTV static Linkvertise check failed: %s", exc)
 
-        # 4. If direct API replay didn't resolve, trigger fallback to BrowserResolver
+        # 4. GraphQL metadata check
+        try:
+            parts = link_path.strip("/").split("/")
+            if len(parts) >= 2:
+                user_id, link_slug = parts[0], parts[1]
+                gql_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Referer": "https://linkvertise.com/",
+                }
+                gql_payload = {
+                    "operationName": "getLinkByIdentifier",
+                    "variables": {"identifier": {"userIdAndUrl": {"user_id": user_id, "url": link_slug}}},
+                    "query": """query getLinkByIdentifier($identifier: PublicLinkIdentificationInput!) {
+                      linkByIdentifier(linkIdentificationInput: $identifier) {
+                        id
+                        url
+                        target_type
+                        title
+                        description
+                      }
+                    }"""
+                }
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    gql_resp = await client.post(
+                        "https://publisher.linkvertise.com/graphql?name=getLinkByIdentifier",
+                        headers=gql_headers,
+                        json=gql_payload,
+                    )
+                    if gql_resp.status_code == 200:
+                        l_data = gql_resp.json().get("data", {}).get("linkByIdentifier", {})
+                        if isinstance(l_data, dict):
+                            desc = l_data.get("description") or ""
+                            m = re.search(r"https?://[^\s\"'<>]+", desc)
+                            if m:
+                                cand = m.group(0)
+                                if not any(x in cand for x in ("linkvertise", "doubleclick")):
+                                    return ResolutionResult.success(clean_target_url(cand), ResolutionMethod.API)
+        except Exception as exc:
+            logger.debug("GraphQL link check failed: %s", exc)
+
+        # 5. If direct API replay didn't resolve, trigger fallback to BrowserResolver
         return ResolutionResult.failure(
             ResolutionStatus.UNRESOLVABLE,
             method=ResolutionMethod.API,

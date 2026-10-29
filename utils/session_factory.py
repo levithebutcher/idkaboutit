@@ -166,17 +166,31 @@ async def create_context(
 
 async def _route_handler(route) -> None:
     """
-    Block heavy resources to speed up page loads.
-
-    Adjust this list if a shortener requires images or fonts to be loaded
-    for its countdown to trigger. Most do NOT — they only need JS + XHR.
+    Block intrusive ad trackers and heavy media while allowing fonts, styles,
+    and standard images so bot-detection scripts (BotD, FingerprintJS) are not tripped.
     """
     try:
-        resource_type = route.request.resource_type
-        if resource_type in ("image", "media", "font"):
+        req = route.request
+        res_type = req.resource_type
+        url = req.url.lower()
+
+        # Block massive media/video/audio downloads
+        if res_type in ("media",):
             await route.abort()
-        else:
-            await route.continue_()
+            return
+
+        # Block known ad and tracking domains
+        ad_domains = (
+            "doubleclick.net", "googleadservices.com", "googlesyndication.com",
+            "adservice.google.com", "adsterra.com", "propellerads.com",
+            "popads.net", "exoclick.com", "adcash.com", "criteo.com",
+            "taboola.com", "outbrain.com", "ad-server.linkvertise.com",
+        )
+        if any(ad in url for ad in ad_domains):
+            await route.abort()
+            return
+
+        await route.continue_()
     except Exception:
         pass
 

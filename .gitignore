@@ -29,3 +29,8 @@ data/sessions/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Notebooks & Colab files (local device only)
+*.ipynb
+Colab_Bypass_Suite.ipynb
+

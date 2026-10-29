@@ -1,0 +1,17 @@
+# Telegram Bots
+aiogram>=3.13.0
+telethon>=1.36.0
+
+# Browser Automation
+playwright>=1.47.0
+playwright-stealth>=1.0.6
+
+# HTTP Client (for API calls & fallback resolvers)
+httpx>=0.27.0
+
+# Configuration Management
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+
+# Utilities
+python-dotenv>=1.0.1

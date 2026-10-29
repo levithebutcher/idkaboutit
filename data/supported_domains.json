@@ -1,0 +1,192 @@
+{
+    "version": "1.0.0",
+    "last_updated": "2026-10-29",
+    "domains": {
+        "linkvertise.com": {
+            "strategy": "linkvertise_api",
+            "display_name": "Linkvertise",
+            "alternate_hosts": [
+                "linkvertise.net",
+                "link-to.net",
+                "linkvertise.de",
+                "up-to-down.net",
+                "direct-link.net",
+                "file-upload.net",
+                "link-hub.net",
+                "link-target.net",
+                "link-center.net",
+                "social-unlock.com"
+            ],
+            "warmup_url": "https://linkvertise.com/",
+            "requires_storage_state": true,
+            "notes": "Primary strategy uses publisher API replay. Falls back to browser resolver if API fails."
+        },
+        "speedy.link": {
+            "strategy": "browser",
+            "display_name": "SpeedyLink",
+            "alternate_hosts": [
+                "speedy-links.com",
+                "speedy-link.com",
+                "speedy-links.net"
+            ],
+            "warmup_url": "https://speedy.link/",
+            "requires_storage_state": true,
+            "notes": "JS-heavy countdown. Requires page.clock fast-forward + DOM wait."
+        },
+        "dt-m.net": {
+            "strategy": "browser",
+            "display_name": "DT-M",
+            "alternate_hosts": [
+                "dtm.net",
+                "dt-m.com"
+            ],
+            "warmup_url": "https://dt-m.net/",
+            "requires_storage_state": false,
+            "notes": "Simple countdown + hidden anchor. Raw HTML inspection often resolves immediately."
+        },
+        "fastforward.cc": {
+            "strategy": "fallback",
+            "display_name": "FastForward",
+            "alternate_hosts": [
+                "fastforward.monster",
+                "ff.cc"
+            ],
+            "warmup_url": "https://fastforward.cc/",
+            "requires_storage_state": false,
+            "notes": "Aggressive Cloudflare bot protection. Browser resolver frequently hits CAPTCHA_GATE. Prefer fallback API."
+        },
+        "blockfy.cc": {
+            "strategy": "browser",
+            "display_name": "Blockfy",
+            "alternate_hosts": [
+                "blockfy.net",
+                "blockfy.io"
+            ],
+            "warmup_url": "https://blockfy.cc/",
+            "requires_storage_state": true,
+            "notes": "Uses obfuscated JS. Try raw HTML inspection first, then browser flow."
+        },
+        "paywall.io": {
+            "strategy": "fallback",
+            "display_name": "Paywall.",
+            "alternate_hosts": [
+                "paywall.cc",
+                "paywall.net"
+            ],
+            "warmup_url": "https://paywall.io/",
+            "requires_storage_state": false,
+            "notes": "Login-gated in most flows. Browser resolver almost always hits CAPTCHA_GATE. Prefer fallback."
+        },
+        "mboost.me": {
+            "strategy": "browser",
+            "display_name": "MBoost",
+            "alternate_hosts": [
+                "mboost.io",
+                "mboost.net"
+            ],
+            "warmup_url": "https://mboost.me/",
+            "requires_storage_state": true,
+            "notes": "Similar to SpeedyLink. Uses countdown + button gate."
+        },
+        "sub2unlock.com": {
+            "strategy": "browser",
+            "display_name": "Sub2Unlock",
+            "alternate_hosts": [
+                "sub2unlock.net",
+                "sub2unlock.io"
+            ],
+            "warmup_url": "https://sub2unlock.com/",
+            "requires_storage_state": false,
+            "notes": "Requires social follow verification. Bot cannot complete; mark as UNRESOLVABLE unless target URL visible in raw HTML."
+        },
+        "boost.ink": {
+            "strategy": "browser",
+            "display_name": "Boost.ink",
+            "alternate_hosts": [
+                "boosten.ink",
+                "boostink.com"
+            ],
+            "warmup_url": "https://boost.ink/",
+            "requires_storage_state": true,
+            "notes": "Countdown + ad gate. Standard browser flow usually works."
+        },
+        "shrinkme.io": {
+            "strategy": "browser",
+            "display_name": "ShrinkMe",
+            "alternate_hosts": [
+                "shrinkme.in",
+                "shrink-earn.com",
+                "shrinke.me"
+            ],
+            "warmup_url": "https://shrinkme.io/",
+            "requires_storage_state": true,
+            "notes": "Multiple ad steps. Raw HTML inspection of final payload works most of the time."
+        },
+        "gplinks.com": {
+            "strategy": "browser",
+            "display_name": "GPLinks",
+            "alternate_hosts": [
+                "gplinks.in",
+                "gplink.in",
+                "gplinks.co"
+            ],
+            "warmup_url": "https://gplinks.com/",
+            "requires_storage_state": false,
+            "notes": "Simple redirect chain. Often resolvable with plain HTTP redirect following + one browser pass."
+        },
+        "ouo.io": {
+            "strategy": "browser",
+            "display_name": "OUO",
+            "alternate_hosts": [
+                "ouo.press"
+            ],
+            "warmup_url": "https://ouo.io/",
+            "requires_storage_state": true,
+            "notes": "Classic countdown. Browser flow with clock fast-forward usually works."
+        },
+        "adf.ly": {
+            "strategy": "browser",
+            "display_name": "AdF.ly",
+            "alternate_hosts": [
+                "adf.ly",
+                "adyou.me",
+                "atominik.com"
+            ],
+            "warmup_url": "https://adf.ly/",
+            "requires_storage_state": true,
+            "notes": "Button click after 5s countdown. Very stable; simplest flow."
+        }
+    },
+    "resolver_priority": {
+        "api_first": [
+            "linkvertise.com"
+        ],
+        "browser_first": [
+            "speedy.link",
+            "dt-m.net",
+            "blockfy.cc",
+            "mboost.me",
+            "boost.ink",
+            "shrinkme.io",
+            "gplinks.com",
+            "ouo.io",
+            "adf.ly"
+        ],
+        "fallback_only": [
+            "fastforward.cc",
+            "paywall.io"
+        ],
+        "manual_review": [
+            "sub2unlock.com"
+        ]
+    },
+    "unsupported_host_patterns": [
+        "bit.ly",
+        "tinyurl.com",
+        "t.co",
+        "goo.gl",
+        "is.gd",
+        "cutt.ly",
+        "rebrand.ly"
+    ]
+}

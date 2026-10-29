@@ -6,7 +6,7 @@ chains fallbacks, and handles retries.
 
 Decision logic:
 1. Look up domain in supported_domains.json.
-2. If unsupported -> UNSUPPORTED_DOMAIN (no retry).
+2. If uncataloged -> route to generic "browser" strategy with fallback.
 3. If strategy == "linkvertise_api" -> try API first, then browser, then fallback.
 4. If strategy == "browser"          -> try browser first, then fallback.
 5. If strategy == "fallback"         -> try fallback only.
@@ -94,16 +94,11 @@ class ResolverOrchestrator:
         entry = _resolve_domain_entry(domain)
 
         if entry is None:
-            logger.info("Unsupported domain: %s", domain)
-            return ResolutionResult.failure(
-                ResolutionStatus.UNSUPPORTED_DOMAIN,
-                error_class="UnsupportedDomain",
-                error_message=f"{domain} is not in supported_domains.json",
-                domain=domain,
-                original_url=url,
-            )
+            logger.info("Domain '%s' not in catalog, attempting generic browser resolution", domain)
+            strategy = "browser"
+        else:
+            strategy = entry.get("strategy", "browser")
 
-        strategy = entry.get("strategy", "browser")
         chain = self._build_chain(strategy)
         logger.info("Resolving %s via chain: %s", domain, [r.name for r in chain])
 
@@ -114,7 +109,7 @@ class ResolverOrchestrator:
             last_result = result
 
             if result.status.is_success:
-                # On success, clear any stale failure storage
+                # On success, return immediately
                 return result
 
             if not result.should_fallback:

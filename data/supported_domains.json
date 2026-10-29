@@ -27,7 +27,9 @@
             "alternate_hosts": [
                 "speedy-links.com",
                 "speedy-link.com",
-                "speedy-links.net"
+                "speedy-links.net",
+                "best-links.org",
+                "best-link.org"
             ],
             "warmup_url": "https://speedy.link/",
             "requires_storage_state": true,

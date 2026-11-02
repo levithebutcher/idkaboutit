@@ -46,6 +46,7 @@ from resolvers.base import (
 from utils.logger import get_logger
 from utils.session_factory import create_context, warmup_domain
 from utils.stealth_config import apply_human_like_mouse, apply_navigator_overrides
+from utils.userscript_engine import apply_userscripts
 
 logger = get_logger(__name__)
 
@@ -153,17 +154,7 @@ class BrowserResolver(BaseResolver):
 
             page = await context.new_page()
             await apply_navigator_overrides(page)
-
-            # Timer accelerator + popup killer init script
-            await page.add_init_script("""
-                window.open = function() { return null; };
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                setInterval(() => {
-                    if (typeof window.timer !== 'undefined' && window.timer > 0) window.timer = 0;
-                    if (typeof window.countdown !== 'undefined' && window.countdown > 0) window.countdown = 0;
-                    if (typeof window.counter !== 'undefined' && window.counter > 0) window.counter = 0;
-                }, 300);
-            """)
+            await apply_userscripts(page)
 
             # Intercept network responses to capture API targets (e.g. Linkvertise & /links/go)
             intercepted_targets: list[str] = []
@@ -258,16 +249,42 @@ class BrowserResolver(BaseResolver):
                     logger.info("[%s] Resolved via page navigation: %s", domain, curr_url)
                     return ResolutionResult.success(clean_target_url(curr_url), ResolutionMethod.BROWSER)
 
-                # 3. Dismiss Cookie / GDPR / Consent dialogs
+                # 3. Did Userscript or Popup Interceptor trap a destination URL?
+                try:
+                    bypassed = await page.evaluate("() => window.__bypassed_url")
+                    if bypassed and self._looks_like_target(bypassed, domain):
+                        logger.info("[%s] Resolved from userscript __bypassed_url: %s", domain, bypassed)
+                        return ResolutionResult.success(clean_target_url(bypassed), ResolutionMethod.DOM)
+                except Exception:
+                    pass
+
+                # 4. Check SpeedyLink / Best-Links embedded destination
+                try:
+                    conf_link = await page.evaluate("""() => {
+                        if (typeof document.verify === 'function') {
+                            try { document.verify(); } catch(e) {}
+                        }
+                        if (window.conf_rew && window.conf_rew.link) {
+                            return window.conf_rew.link;
+                        }
+                        return null;
+                    }""")
+                    if conf_link and self._looks_like_target(conf_link, domain):
+                        logger.info("[%s] Resolved from conf_rew: %s", domain, conf_link)
+                        return ResolutionResult.success(clean_target_url(conf_link), ResolutionMethod.DOM)
+                except Exception:
+                    pass
+
+                # 5. Dismiss Cookie / GDPR / Consent dialogs
                 await self._dismiss_consent_dialogs(page)
 
-                # 4. Click Linkvertise specific "Free Access" buttons
+                # 6. Click Linkvertise specific "Get access" / "Free Access" buttons
                 await self._click_linkvertise_access(page)
 
-                # 5. Click Continue / Get Link buttons
+                # 7. Click Continue / Get Link buttons
                 await self._click_continue_buttons(page)
 
-                # 6. Check LocalStorage for targets
+                # 8. Check LocalStorage for targets
                 ls_result = await self._extract_from_storage(page, domain)
                 if ls_result and self._looks_like_target(ls_result, domain):
                     logger.info("[%s] Resolved from localStorage: %s", domain, ls_result)

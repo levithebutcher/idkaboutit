@@ -76,7 +76,7 @@ _AD_HOSTS = (
     # Google analytics, tags & tracking
     "googletagmanager.com", "google-analytics.com", "analytics.google.com",
     "googleadservices.com", "googlesyndication.com", "doubleclick.net",
-    "adservice.google.com",
+    "adservice.google.com", "google.com", "www.google.com",
     # Ad networks
     "taboola.com", "outbrain.com", "adsterra.com", "propellerads.com",
     "popads.net", "popcash.net", "exoclick.com", "juicyads.com",
@@ -88,12 +88,14 @@ _AD_HOSTS = (
     "ad-server.linkvertise.com", "integrate.linkvertise.com",
     # Bot challenges / trackers
     "challenges.cloudflare.com",
-    # Intermediate shortener mirror domains (never final destination)
+    # Intermediate shortener mirror & bridge domains (never final destination)
     "best-links.org", "best-link.org", "speedy.link", "speedy-links.com",
     "speedy-link.com", "speedy-links.net", "linkvertise.com", "linkvertise.net",
     "link-to.net", "up-to-down.net", "direct-link.net", "file-upload.net",
     "link-hub.net", "link-target.net", "link-center.net", "social-unlock.com",
     "dt-m.net", "dtm.net", "dt-m.com", "fastforward.cc", "blockfy.cc", "mboost.me",
+    "kishanganjhalchal.com", "kannursalafi.com", "rocklinks.net", "droplink.co",
+    "ez4short.com", "shrinkme.io", "gplinks.co", "liteshort.com", "link.liteshort.com",
 )
 
 
@@ -422,7 +424,23 @@ class BrowserResolver(BaseResolver):
                 pass
 
     async def _click_continue_buttons(self, page: Page) -> None:
-        """Click standard 'Continue', 'Get Link', or 'Skip' buttons."""
+        """Click standard 'Continue', 'Get Link', Safelink forms or 'Skip' buttons."""
+        # Auto-submit WP Safelink / RTG / Indian Shortener forms if present
+        try:
+            submitted = await page.evaluate("""() => {
+                const form = document.querySelector('form#rtg, form:has(input[name*="safelink"])');
+                if (form) {
+                    form.submit();
+                    return true;
+                }
+                return false;
+            }""")
+            if submitted:
+                await asyncio.sleep(1.0)
+                return
+        except Exception:
+            pass
+
         button_selectors = [
             "button:has-text('Get Link')",
             "a:has-text('Get Link')",
@@ -431,8 +449,16 @@ class BrowserResolver(BaseResolver):
             "button:has-text('Proceed')",
             "button:has-text('Skip Ad')",
             "a:has-text('Skip Ad')",
+            "button:has-text('Click here to continue')",
+            "button:has-text('GO TO LINK')",
+            "button:has-text('Dual Tap')",
             "#btn-main",
             "#go-link button",
+            "#getlink",
+            "#getlink1",
+            "#rtg-snp2",
+            "#rtg-snp21",
+            "form#rtg button",
         ]
         for sel in button_selectors:
             try:
@@ -487,6 +513,7 @@ class BrowserResolver(BaseResolver):
         - starts with http(s)
         - different host from shortener and its mirrors
         - not an ad/tracker/analytics/google tag host
+        - not an intermediate redirect script or safelink bridge
         - not a static script, image, or stylesheet
         """
         if not url or not url.startswith("http"):
@@ -509,12 +536,35 @@ class BrowserResolver(BaseResolver):
             if host == ad or host.endswith("." + ad):
                 return False
 
+        # Ignore Google search, sorry, or oauth/tag paths
+        if "google." in host:
+            if any(p in parsed.path.lower() for p in ("/search", "/sorry", "/url", "/pagead", "/ads")):
+                return False
+
+        # Reject URLs that are intermediate shortener bridge scripts
+        path_lower = parsed.path.lower()
+        intermediate_scripts = (
+            "no.php", "safe.php", "out.php", "go.php", "link.php",
+            "redirect.php", "gateway.php",
+        )
+        if any(path_lower.endswith(s) or f"/{s}" in path_lower for s in intermediate_scripts):
+            return False
+
+        # Reject URLs with intermediate shortener parameters
+        query_lower = parsed.query.lower()
+        intermediate_params = (
+            "link=", "url=", "go=", "dest=", "safelink=",
+            "newwpsafelink", "newsafelink", "redirect=", "target=",
+        )
+        if any(p in query_lower for p in intermediate_params):
+            return False
+
         # Ignore static resources
         static_exts = (
             ".png", ".jpg", ".jpeg", ".gif", ".css", ".js", ".svg",
             ".webp", ".ico", ".woff", ".woff2", ".ttf", ".json", ".xml"
         )
-        if parsed.path.lower().endswith(static_exts):
+        if path_lower.endswith(static_exts):
             return False
 
         return True

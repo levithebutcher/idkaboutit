@@ -2,7 +2,7 @@
 utils/userscript_engine.py
 ---------------------------
 Injects Greasemonkey/Tampermonkey polyfills and battle-tested bypass userscripts
-into Playwright pages before document load.
+(Bypass All Shortlinks, Bypass.city, Bypass.vip) into Playwright pages before document load.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_USERSCRIPT_FILE = _DATA_DIR / "bypass_all_shortlinks.user.js"
 
 # Comprehensive Tampermonkey / Greasemonkey API Shim & Timer Accelerator
 GM_POLYFILL_JS = """
@@ -41,6 +40,23 @@ GM_POLYFILL_JS = """
         try { localStorage.removeItem('GM_' + k); } catch(e) {}
     };
     window.GM_listValues = () => Object.keys(_gm_storage);
+
+    // Modern GM.* object
+    window.GM = {
+        xmlHttpRequest: (details) => window.GM_xmlhttpRequest(details),
+        setValue: async (k, v) => window.GM_setValue(k, v),
+        getValue: async (k, def) => window.GM_getValue(k, def),
+        deleteValue: async (k) => window.GM_deleteValue(k),
+        listValues: async () => window.GM_listValues(),
+        addStyle: (css) => window.GM_addStyle(css),
+        openInTab: (url) => window.GM_openInTab(url),
+    };
+
+    window.GM_info = {
+        script: { name: 'Playwright Bypass Userscript Suite', version: '14.0.2', downloadURL: '' },
+        scriptHandler: 'Tampermonkey',
+        version: '5.0'
+    };
 
     // 3. DOM & Styling
     window.GM_addStyle = (css) => {
@@ -92,23 +108,6 @@ GM_POLYFILL_JS = """
         });
     };
 
-    // Modern GM.* object
-    window.GM = {
-        xmlHttpRequest: window.GM_xmlhttpRequest,
-        setValue: async (k, v) => window.GM_setValue(k, v),
-        getValue: async (k, def) => window.GM_getValue(k, def),
-        deleteValue: async (k) => window.GM_deleteValue(k),
-        listValues: async () => window.GM_listValues(),
-        addStyle: (css) => window.GM_addStyle(css),
-        openInTab: (url) => window.GM_openInTab(url),
-    };
-
-    window.GM_info = {
-        script: { name: 'Playwright Bypass Userscript Engine', version: '2.0' },
-        scriptHandler: 'Tampermonkey',
-        version: '5.0'
-    };
-
     // 6. MonkeyConfig & BpNote shims (used by Bypass All Shortlinks)
     window.MonkeyConfig = function(options) {
         this.get = function(key) {
@@ -120,16 +119,24 @@ GM_POLYFILL_JS = """
         this.set = function() {};
         this.open = function() {};
     };
-    window.BpNote = function(msg, level) {
-        // console.debug('[Bypass Userscript ' + (level || 'info') + ']', msg);
-    };
+    window.BpNote = function(msg, level) {};
 
-    // 7. Anti-Adblock & Bot Neutralization
+    // 7. Bypass.city CustomEvent Listener
+    window.addEventListener("bypassComplete", (event) => {
+        try {
+            const data = event.detail;
+            if (data && data.bypassData && typeof data.bypassData === 'string') {
+                window.__bypassed_url = data.bypassData;
+            }
+        } catch(e) {}
+    });
+
+    // 8. Anti-Adblock & Bot Neutralization
     window.isAdBlockActive = false;
     window.canRunAds = true;
     window.adBlockDetected = false;
 
-    // 8. Universal Timer Accelerator
+    // 9. Universal Timer Accelerator
     const _origSetTimeout = window.setTimeout;
     const _origSetInterval = window.setInterval;
     window.setTimeout = function(fn, delay, ...args) {
@@ -141,7 +148,7 @@ GM_POLYFILL_JS = """
         return _origSetInterval(fn, d, ...args);
     };
 
-    // 9. SpeedyLink & Linkvertise Early Hooks
+    // 10. SpeedyLink & Linkvertise Early Hooks
     const runEarlyHooks = () => {
         // Remove CMP overlays immediately
         try {
@@ -172,11 +179,11 @@ async def apply_userscripts(page: Page) -> None:
     # 1. Inject Greasemonkey/Tampermonkey environment & hooks
     await page.add_init_script(GM_POLYFILL_JS)
 
-    # 2. Inject Bypass All Shortlinks script if present
-    if _USERSCRIPT_FILE.exists():
+    # 2. Inject all available userscripts from data/*.user.js
+    for js_path in sorted(_DATA_DIR.glob("*.user.js")):
         try:
-            script_code = _USERSCRIPT_FILE.read_text(encoding="utf-8")
+            script_code = js_path.read_text(encoding="utf-8")
             await page.add_init_script(script_code)
-            logger.debug("Userscript injected: %s", _USERSCRIPT_FILE.name)
+            logger.debug("Userscript injected: %s", js_path.name)
         except Exception as exc:
-            logger.warning("Failed to inject userscript %s: %s", _USERSCRIPT_FILE.name, exc)
+            logger.warning("Failed to inject userscript %s: %s", js_path.name, exc)

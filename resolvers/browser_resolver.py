@@ -19,6 +19,7 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import time
 import base64
 import json
 import logging
@@ -64,6 +65,32 @@ _CAPTCHA_HINTS = (
     "g-recaptcha", "challenges.cloudflare.com",
 )
 
+# Whitelist of trusted file hosts that are ALWAYS accepted as destinations
+_TRUSTED_FILE_HOSTS = (
+    "mega.nz",
+    "drive.google.com",
+    "mediafire.com",
+    "dropbox.com",
+    "pixeldrain.com",
+    "gofile.io",
+    "1fichier.com",
+    "yadi.sk",
+    "disk.yandex.com",
+)
+
+# Shortener family domains
+_SHORTENER_FAMILY = (
+    "best-links.org",
+    "best-link.org",
+    "linkfly.net",
+    "clicksfly.com",
+    "mboost.me",
+    "thetrap.tv",
+    "speedy-links.com",
+    "speedy.link",
+    "speedy-link.com",
+)
+
 # Common localStorage keys holding target destination URLs
 _DEST_KEYS = (
     "redirectUrl", "redirect_url", "targetUrl", "target_url",
@@ -89,6 +116,8 @@ _AD_HOSTS = (
     # Bot challenges / trackers
     "challenges.cloudflare.com",
     # Intermediate shortener mirror & bridge domains (never final destination)
+    # External bypass services (never final destinations)
+    "bypass.vip", "bypass.city", "adbypass.org",
     "best-links.org", "best-link.org", "speedy.link", "speedy-links.com",
     "speedy-link.com", "speedy-links.net", "linkvertise.com", "linkvertise.net",
     "link-to.net", "up-to-down.net", "direct-link.net", "file-upload.net",
@@ -148,6 +177,7 @@ class BrowserResolver(BaseResolver):
         warmup_url = meta.get("warmup_url")
 
         context: BrowserContext | None = None
+        page: Page | None = None
         try:
             context = await create_context(self._browser, domain, use_saved_state=True)
 
@@ -246,21 +276,49 @@ class BrowserResolver(BaseResolver):
                     return ResolutionResult.success(clean_target_url(chosen), ResolutionMethod.API)
 
                 # 2. Did the page navigate to a genuine destination URL?
-                curr_url = page.url
-                if curr_url and curr_url != url and self._looks_like_target(curr_url, domain):
-                    logger.info("[%s] Resolved via page navigation: %s", domain, curr_url)
-                    return ResolutionResult.success(clean_target_url(curr_url), ResolutionMethod.BROWSER)
-
-                # 3. Did Userscript or Popup Interceptor trap a destination URL?
                 try:
-                    bypassed = await page.evaluate("() => window.__bypassed_url")
-                    if bypassed and self._looks_like_target(bypassed, domain):
-                        logger.info("[%s] Resolved from userscript __bypassed_url: %s", domain, bypassed)
-                        return ResolutionResult.success(clean_target_url(bypassed), ResolutionMethod.DOM)
+                    curr_url = page.url
+                    if curr_url and curr_url != url and self._looks_like_target(curr_url, domain):
+                        logger.info("[%s] Resolved via page navigation: %s", domain, curr_url)
+                        return ResolutionResult.success(clean_target_url(curr_url), ResolutionMethod.BROWSER)
                 except Exception:
                     pass
 
-                # 4. Check SpeedyLink / Best-Links embedded destination
+                # 3. Dismiss Cookie / GDPR / Consent dialogs
+                await self._dismiss_consent_dialogs(page)
+
+                # 4. Click Linkvertise specific "Get access" / "Free Access" buttons
+                await self._click_linkvertise_access(page)
+
+                # 5. Click Continue / Get Link buttons
+                await self._click_continue_buttons(page)
+
+                # 6. Wait for progress / timers
+                await self._wait_for_progress(page)
+
+                # 7. Check Userscript trapped destination URL (Issue 1)
+                try:
+                    bypassed = await page.evaluate("() => window.__bypassed_url || null")
+                    if bypassed and isinstance(bypassed, str) and bypassed.startswith("http") and self._looks_like_target(bypassed, domain):
+                        logger.info("[%s] Resolved from userscript __bypassed_url: %s", domain, bypassed)
+                        return ResolutionResult.success(clean_target_url(bypassed), ResolutionMethod.USERSCRIPT)
+                except Exception:
+                    pass
+
+                # 8. Listen for custom "bypassComplete" event dispatched by bypass.city.user.js (Issue 1)
+                try:
+                    event_bypassed = await page.evaluate("""() => new Promise(resolve => {
+                        if (window.__bypassed_url) return resolve(window.__bypassed_url);
+                        window.addEventListener('bypassComplete', e => resolve(e.detail?.url || e.detail?.bypassData || (typeof e.detail === 'string' ? e.detail : null)), {once: true});
+                        setTimeout(() => resolve(null), 2000);
+                    })""")
+                    if event_bypassed and isinstance(event_bypassed, str) and event_bypassed.startswith("http") and self._looks_like_target(event_bypassed, domain):
+                        logger.info("[%s] Resolved from bypassComplete event: %s", domain, event_bypassed)
+                        return ResolutionResult.success(clean_target_url(event_bypassed), ResolutionMethod.USERSCRIPT)
+                except Exception:
+                    pass
+
+                # 9. Check SpeedyLink / Best-Links embedded destination
                 try:
                     conf_link = await page.evaluate("""() => {
                         if (typeof document.verify === 'function') {
@@ -277,28 +335,22 @@ class BrowserResolver(BaseResolver):
                 except Exception:
                     pass
 
-                # 5. Dismiss Cookie / GDPR / Consent dialogs
-                await self._dismiss_consent_dialogs(page)
-
-                # 6. Click Linkvertise specific "Get access" / "Free Access" buttons
-                await self._click_linkvertise_access(page)
-
-                # 7. Click Continue / Get Link buttons
-                await self._click_continue_buttons(page)
-
-                # 8. Check LocalStorage for targets
+                # 10. Check LocalStorage for targets
                 ls_result = await self._extract_from_storage(page, domain)
                 if ls_result and self._looks_like_target(ls_result, domain):
                     logger.info("[%s] Resolved from localStorage: %s", domain, ls_result)
                     return ResolutionResult.success(clean_target_url(ls_result), ResolutionMethod.LOCALSTORAGE)
 
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.0)
 
             # --- Final DOM inspection check ---
             dom_result = await self._extract_from_dom(page, domain)
             if dom_result and self._looks_like_target(dom_result, domain):
                 logger.info("[%s] Resolved from DOM anchor: %s", domain, dom_result)
                 return ResolutionResult.success(clean_target_url(dom_result), ResolutionMethod.DOM)
+
+            # Save debug snapshot on failure (Issue 5)
+            await self._save_debug_dump(page, domain)
 
             return ResolutionResult.failure(
                 ResolutionStatus.UNRESOLVABLE,
@@ -308,12 +360,16 @@ class BrowserResolver(BaseResolver):
             )
 
         except PlaywrightTimeoutError:
+            if page is not None:
+                await self._save_debug_dump(page, domain)
             return ResolutionResult.failure(
                 ResolutionStatus.TIMEOUT,
                 method=ResolutionMethod.BROWSER,
                 error_class="PlaywrightTimeout",
             )
         except Exception as exc:
+            if page is not None:
+                await self._save_debug_dump(page, domain)
             logger.warning("[%s] browser resolver error: %s", domain, exc)
             return ResolutionResult.failure(
                 ResolutionStatus.INTERNAL_ERROR,
@@ -327,6 +383,35 @@ class BrowserResolver(BaseResolver):
                     await context.close()
                 except Exception:
                     pass
+
+    async def _save_debug_dump(self, page: Page, domain: str) -> None:
+        """Save screenshot and HTML dump on failure for debugging (Issue 5)."""
+        try:
+            logs_dir = Path("logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            clean_domain = re.sub(r"[^\w\-.]", "_", domain)
+            timestamp = int(time.time())
+            screenshot_path = logs_dir / f"fail_{clean_domain}_{timestamp}.png"
+            html_path = logs_dir / f"fail_{clean_domain}_{timestamp}.html"
+
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            html_content = await page.content()
+            html_path.write_text(html_content, encoding="utf-8")
+
+            logger.warning(
+                "[%s] Resolution failed. Saved debug snapshot: %s and %s",
+                domain, screenshot_path, html_path,
+            )
+        except Exception as exc:
+            logger.debug("[%s] Failed to save debug snapshot: %s", domain, exc)
+
+    async def _wait_for_progress(self, page: Page) -> None:
+        """Wait briefly for timers, progress bars, or redirect countdowns to advance."""
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=2000)
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
 
     # ---------- Interaction Helpers ----------
 
@@ -343,12 +428,22 @@ class BrowserResolver(BaseResolver):
         return None
 
     async def _has_captcha(self, page: Page) -> bool:
-        """Return True if a captcha widget is present on the page."""
+        """Return True if an active blocking captcha widget is visible on the page."""
         try:
-            html = (await page.content()).lower()
-            return any(h in html for h in _CAPTCHA_HINTS)
+            captcha_selectors = [
+                "iframe[src*='recaptcha/api2/bframe']",
+                "iframe[src*='challenges.cloudflare.com']",
+                "iframe[src*='hcaptcha.com/captcha']",
+                "#cf-challenge-running",
+                "#challenge-form",
+            ]
+            for sel in captcha_selectors:
+                el = page.locator(sel).first
+                if await el.is_visible(timeout=300):
+                    return True
         except Exception:
-            return False
+            pass
+        return False
 
     async def _dismiss_consent_dialogs(self, page: Page) -> None:
         """Dismiss GDPR / Cookie consent popups (e.g. on Linkvertise)."""
@@ -526,6 +621,17 @@ class BrowserResolver(BaseResolver):
         if not host or "." not in host:
             return False
 
+        path_lower = parsed.path.lower()
+        static_exts = (
+            ".png", ".jpg", ".jpeg", ".gif", ".css", ".js", ".svg",
+            ".webp", ".ico", ".woff", ".woff2", ".ttf", ".json", ".xml"
+        )
+
+        # Issue 2: Trusted file hosts are ALWAYS accepted
+        is_trusted_host = any(host == tfh or host.endswith("." + tfh) for tfh in _TRUSTED_FILE_HOSTS)
+        if is_trusted_host:
+            return not path_lower.endswith(static_exts)
+
         short = shortener_domain.lower()
         if short.startswith("www."):
             short = short[4:]
@@ -538,11 +644,10 @@ class BrowserResolver(BaseResolver):
 
         # Ignore Google search, sorry, or oauth/tag paths
         if "google." in host:
-            if any(p in parsed.path.lower() for p in ("/search", "/sorry", "/url", "/pagead", "/ads")):
+            if any(p in path_lower for p in ("/search", "/sorry", "/url", "/pagead", "/ads")):
                 return False
 
         # Reject URLs that are intermediate shortener bridge scripts
-        path_lower = parsed.path.lower()
         intermediate_scripts = (
             "no.php", "safe.php", "out.php", "go.php", "link.php",
             "redirect.php", "gateway.php",
@@ -550,20 +655,22 @@ class BrowserResolver(BaseResolver):
         if any(path_lower.endswith(s) or f"/{s}" in path_lower for s in intermediate_scripts):
             return False
 
-        # Reject URLs with intermediate shortener parameters
+        # Issue 2: Only reject intermediate redirects with ?url=, ?link=, ?go= when:
+        # (a) points to the same shortener family, OR
+        # (b) has a very short path (<=2 chars) AND no file extension AND no known file-host domain
         query_lower = parsed.query.lower()
         intermediate_params = (
             "link=", "url=", "go=", "dest=", "safelink=",
             "newwpsafelink", "newsafelink", "redirect=", "target=",
         )
         if any(p in query_lower for p in intermediate_params):
-            return False
+            clean_path = path_lower.strip("/")
+            has_short_path = (len(clean_path) <= 2) and ("." not in clean_path.split("/")[-1])
+            is_shortener_family = any(host == sf or host.endswith("." + sf) for sf in _SHORTENER_FAMILY)
+            if is_shortener_family or has_short_path:
+                return False
 
         # Ignore static resources
-        static_exts = (
-            ".png", ".jpg", ".jpeg", ".gif", ".css", ".js", ".svg",
-            ".webp", ".ico", ".woff", ".woff2", ".ttf", ".json", ".xml"
-        )
         if path_lower.endswith(static_exts):
             return False
 

@@ -65,6 +65,7 @@ class ResolutionMethod(str, Enum):
     RAW_HTML = "raw_html"          # Extracted from raw initial HTML.
     HTTP_REDIRECT = "http_redirect"# Plain 301/302 chain.
     FALLBACK_API = "fallback_api"  # External bypass service.
+    USERSCRIPT = "userscript"      # Captured by userscript or popup hook.
     NONE = "none"                  # No method used (early failure).
 
 

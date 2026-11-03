@@ -7,6 +7,7 @@ Injects Greasemonkey/Tampermonkey polyfills and battle-tested bypass userscripts
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from playwright.async_api import Page
 from utils.logger import get_logger
@@ -125,8 +126,9 @@ GM_POLYFILL_JS = """
     window.addEventListener("bypassComplete", (event) => {
         try {
             const data = event.detail;
-            if (data && data.bypassData && typeof data.bypassData === 'string') {
-                window.__bypassed_url = data.bypassData;
+            const u = (data && typeof data === 'object') ? (data.url || data.bypassData) : data;
+            if (u && typeof u === 'string') {
+                window.__bypassed_url = u;
             }
         } catch(e) {}
     });
@@ -172,18 +174,57 @@ GM_POLYFILL_JS = """
 """
 
 
+def _extract_patterns(script_code: str) -> list[str]:
+    """Extract @match patterns from userscript metadata."""
+    patterns: list[str] = []
+    for line in script_code.splitlines():
+        line = line.strip()
+        if line.startswith("// @match") or line.startswith("// @include"):
+            parts = line.split(maxsplit=2)
+            if len(parts) >= 3:
+                patterns.append(parts[2].strip())
+    return patterns
+
+
 async def apply_userscripts(page: Page) -> None:
     """
     Injects GM polyfill followed by community bypass userscripts into the page.
     """
-    # 1. Inject Greasemonkey/Tampermonkey environment & hooks
-    await page.add_init_script(GM_POLYFILL_JS)
+    # 1. Inject Greasemonkey/Tampermonkey environment & hooks (strictly BEFORE userscripts)
+    try:
+        await page.add_init_script(GM_POLYFILL_JS)
+        logger.debug("GM_POLYFILL_JS injected successfully")
+    except Exception as exc:
+        logger.warning("Failed to inject GM_POLYFILL_JS: %s", exc)
 
     # 2. Inject all available userscripts from data/*.user.js
+    loaded_scripts: list[str] = []
     for js_path in sorted(_DATA_DIR.glob("*.user.js")):
         try:
             script_code = js_path.read_text(encoding="utf-8")
-            await page.add_init_script(script_code)
+            patterns = _extract_patterns(script_code)
+            patterns_json = json.dumps(patterns)
+            guarded_code = (
+                "(() => {\n"
+                "    try {\n"
+                "        const proto = window.location.protocol;\n"
+                "        if (proto !== 'http:' && proto !== 'https:') return;\n"
+                "        const href = window.location.href;\n"
+                f"        const patterns = {patterns_json};\n"
+                "        if (patterns && patterns.length > 0) {\n"
+                "            const matches = patterns.some(p => {\n"
+                r"                const parts = p.split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));" + "\n"
+                "                return new RegExp('^' + parts.join('.*') + '$').test(href);\n"
+                "            });\n"
+                "            if (!matches) return;\n"
+                "        }\n"
+                "    } catch(e) { return; }\n"
+                + script_code + "\n})();"
+            )
+            await page.add_init_script(guarded_code)
+            loaded_scripts.append(js_path.name)
             logger.debug("Userscript injected: %s", js_path.name)
         except Exception as exc:
             logger.warning("Failed to inject userscript %s: %s", js_path.name, exc)
+
+    logger.info("Userscripts loaded (%d): %s", len(loaded_scripts), ", ".join(loaded_scripts))

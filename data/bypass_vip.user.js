@@ -282,6 +282,7 @@
         }
 
         function runScript() {
+            if (window.location.hostname.includes('bypass.vip') || window.location.hostname.includes('bypass.city')) return;
             const urlParams = new URLSearchParams(window.location.search);
             const rawRedirect = urlParams.get('redirect');
 

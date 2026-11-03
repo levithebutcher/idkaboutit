@@ -48,6 +48,7 @@ class FallbackResolver(BaseResolver):
     """Delegates resolution to an external bypass API."""
 
     name = "fallback"
+    _logged_startup_info: bool = False
 
     def __init__(self) -> None:
         self._api_url = settings.fallback_api_url
@@ -55,6 +56,10 @@ class FallbackResolver(BaseResolver):
             settings.fallback_api_key.get_secret_value()
             if settings.fallback_api_key else None
         )
+        if not FallbackResolver._logged_startup_info:
+            if not self._api_url:
+                logger.info("FALLBACK_API_URL not configured; fallback resolver will be inactive")
+            FallbackResolver._logged_startup_info = True
 
     # ---------- Main entry ----------
 

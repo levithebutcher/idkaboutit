@@ -103,10 +103,13 @@ class ResolverOrchestrator:
         logger.info("Resolving %s via chain: %s", domain, [r.name for r in chain])
 
         last_result: ResolutionResult | None = None
+        browser_result: ResolutionResult | None = None
 
         for resolver in chain:
             result = await self._attempt_with_retries(resolver, url, domain)
             last_result = result
+            if resolver.name == "browser":
+                browser_result = result
 
             if result.status.is_success:
                 # On success, return immediately
@@ -128,6 +131,13 @@ class ResolverOrchestrator:
         # All resolvers exhausted
         assert last_result is not None
         logger.warning("[%s] All resolvers failed", domain)
+
+        # Do not let fallback's NoFallbackAPI / FallbackDisabled mask the real browser_resolver error (Issue 4)
+        if browser_result and last_result.error_class in {"NoFallbackAPI", "FallbackDisabled"}:
+            browser_result.extra["fallback_error"] = last_result.error_class
+            browser_result.extra["fallback_message"] = last_result.error_message
+            return browser_result
+
         return last_result
 
     # ---------- Chain building ----------

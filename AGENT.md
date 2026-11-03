@@ -1,73 +1,57 @@
-# 🤖 AGENT.md - AI Developer & Architecture Documentation
+# 🤖 AGENT.md — Link-Bypass Bot Architecture & Knowledge Base
 
-> **Notice for AI Assistants & Maintainers:**  
-> This file outlines the complete architecture, problem-solving history, reverse-engineering implementations, and technical design decisions of this repository. Read this file before making modifications or adding new resolvers.
->
-> ⚠️ **CRITICAL SECURITY RULE:** Never commit, print, or expose actual credentials (Telegram Bot tokens, API keys, passwords, or personal chat IDs) in code, commit messages, or documentation.
+Welcome to the **Link-Bypass Telegram Bot** codebase. This document serves as the single source of truth for the project's architecture, resolver orchestration, recent fixes, and operating procedures for any autonomous agent or developer working on this repository.
 
 ---
 
-## 📌 Project Overview
+## 📌 Repository Purpose & Overview
 
-This repository is a high-performance, asynchronous **Telegram Bypass Bot** built to automatically solve, bypass, and resolve modern link shorteners, ad-gateways, timers, and multi-step redirect networks (such as Linkvertise, Speedy-links, Best-links, Lootlinks, and Indian/Pakistani WordPress Safelink/RTG shortener networks).
+This project is a high-performance, asynchronous link-bypass Telegram bot built using **Aiogram 3.x** and **Playwright**. Its purpose is to accept ad-heavy, timer-restricted, or task-gated shortlinks (e.g. Linkvertise, Speedy-links, Lootlinks, Safelink) and return clean, direct destination URLs to users without ads or tracking.
 
-- **Primary Entrypoint:** `bot.py` (built on **Aiogram 3.x**)
-- **Alternative Lightweight Entrypoint:** `bypass_bot.py` (built on **Telethon**)
-- **Colab Runner:** `Colab_Bypass_Suite.ipynb` (Continuous headless runner with anti-sleep protection)
-- **Git Repository:** `https://github.com/levithebutcher/idkaboutit.git` (branch `main`)
+- **Primary Repository:** `https://github.com/levithebutcher/idkaboutit.git`
+- **Main Branch:** `main`
+- **Primary Runtime:** Python 3.10+ (asyncio, Playwright, Aiogram 3.x, HTTPX, Pydantic v2)
+- **Deployment Environments:** Local machine or cloud containers (Google Colab / Linux VPS).
 
 ---
 
-## 🏛️ System Architecture
+## 🏗️ Architectural Overview & Pipeline
 
-```
-telegram-bypass-bot/
-├── bot.py                     # Main Aiogram 3 bot (Worker pool & dispatcher)
-├── bypass_bot.py              # Telethon single-file alternative
-├── config.py                  # Pydantic v2 settings management
-├── requirements.txt           # Python dependencies
-├── .env.example               # Configuration template (NO secrets)
-├── .gitignore                 # Enforces security (.env and local notebooks)
-├── Colab_Bypass_Suite.ipynb   # Standalone Colab execution suite
-│
-├── data/
-│   ├── supported_domains.json # Domain routing table & strategies
-│   ├── user_agents.json       # Curated browser profiles & fingerprints
-│   ├── bypass_all_shortlinks.user.js # Bloggerpemula universal bypass userscript
-│   ├── bypass_city.user.js    # Bypass.city official userscript (v14.0.2)
-│   └── bypass_vip.user.js     # Bypass.vip official userscript (v1.4.8)
-│
-├── modules/
-│   ├── url_parser.py          # Fast URL extraction & validation from messages
-│   ├── queue_manager.py       # Async job queue with concurrency & user semaphores
-│   └── message_sender.py      # Formatted Telegram HTML replies
-│
-├── resolvers/
-│   ├── base.py                # Abstract BaseResolver & ResolutionResult
-│   ├── orchestrator.py        # Resolver chain dispatcher & fallback coordinator
-│   ├── linkvertise_api.py     # Reverse-engineered Linkvertise GraphQL task solver
-│   ├── browser_resolver.py    # Playwright stealth browser with userscript suite
-│   └── fallback_resolver.py   # HTTP client for third-party bypass services
-│
-└── utils/
-    ├── logger.py              # Colorized structured logging
-    ├── session_factory.py     # Playwright context caching & domain warmups
-    ├── stealth_config.py      # Antidetect fingerprint spoofing & human mouse
-    └── userscript_engine.py   # Greasemonkey/Tampermonkey polyfill & script injector
+The pipeline follows a clean, decoupled producer-consumer model:
+
+```mermaid
+flowchart TD
+    User([Telegram User]) -->|Sends link| Bot[Aiogram Bot Dispatcher]
+    Bot -->|Validate & Extract URL| URLParser[utils/url_parser.py]
+    URLParser -->|Queue Job| QueueMgr[utils/queue_manager.py]
+    QueueMgr -->|Dispatch to Worker| WorkerPool[Async Worker Pool (Max 3)]
+    WorkerPool -->|Resolve URL| Orchestrator[resolvers/orchestrator.py]
+    
+    subgraph Resolvers Chain
+        Orchestrator -->|1. Try Direct API| APIResolver[resolvers/linkvertise_api.py]
+        APIResolver -->|If unresolvable / fallback| BrowserResolver[resolvers/browser_resolver.py]
+        BrowserResolver -->|If unresolvable / fallback| FallbackResolver[resolvers/fallback_resolver.py]
+    end
+    
+    BrowserResolver -->|Tampermonkey Polyfill & Scripts| UserscriptEngine[utils/userscript_engine.py]
+    BrowserResolver -->|Anti-Detection & Fingerprint Evasion| StealthConfig[utils/stealth_config.py]
+    
+    Resolvers Chain -->|ResolutionResult| WorkerPool
+    WorkerPool -->|Format & Send Reply| MsgSender[modules/message_sender.py]
+    MsgSender -->|Telegram API| User
 ```
 
----
-
-## 🔄 Resolution Flow & Orchestration
-
-When a user sends a message containing links:
-1. `modules/url_parser.py` parses and normalizes the link.
-2. `modules/queue_manager.py` enqueues the job into an async priority queue (with per-user concurrency limits to prevent abuse).
-3. `resolvers/orchestrator.py` checks `data/supported_domains.json`:
-   - If domain strategy is `linkvertise_api`: tries `LinkvertiseAPIResolver` ➔ `BrowserResolver` ➔ `FallbackResolver`.
-   - If domain strategy is `browser`: tries `BrowserResolver` ➔ `FallbackResolver`.
-   - If domain is uncataloged: routes automatically to `BrowserResolver` ➔ `FallbackResolver`.
-4. The first resolver to return `ResolutionStatus.SUCCESS` terminates the chain and returns the destination.
+### Key Components:
+1. **Dispatcher & Handlers (`bot.py`, `handlers/`):**
+   - Handles `/start`, `/help`, and incoming text messages containing URLs.
+   - Enforces user rate-limiting (`utils/rate_limiter.py`).
+2. **Queue Manager (`utils/queue_manager.py`):**
+   - In-memory async worker pool processing jobs concurrently without blocking Telegram polling.
+3. **Resolver Orchestrator (`resolvers/orchestrator.py`):**
+   - Determines the optimal resolution chain based on domain metadata in `data/supported_domains.json`.
+   - Supports strategies: `linkvertise_api`, `browser`, and `fallback`.
+   - Handles retries with exponential backoff on retryable network/timeout errors.
+4. **The first resolver to return `ResolutionStatus.SUCCESS` terminates the chain and returns the destination.**
 
 ---
 
@@ -131,6 +115,28 @@ When a user sends a message containing links:
   - WebRTC & audio-oscillator anti-sleep keep-alive scripts.
   - Real-time colorized terminal logging.
 
+### 6. JS-Gateway & Userscript Bypass Enhancements (SpeedyLink / Best-Links / Unlockr)
+- **Issue 1 (Userscript bypass URL & event capture):**
+  - Added new `ResolutionMethod.USERSCRIPT` in `resolvers/base.py`.
+  - Added `_wait_for_progress()` helper in `BrowserResolver`.
+  - After `_click_continue_buttons()` and `_wait_for_progress()`, evaluates `window.__bypassed_url || null`. If valid URL and passes `_looks_like_target()`, returns success with `ResolutionMethod.USERSCRIPT`.
+  - Added listener for the custom `bypassComplete` event dispatched by userscripts (`bypass.city.user.js` / `bypass.vip`).
+- **Issue 2 (Target filtering & trusted host whitelist):**
+  - Added `_TRUSTED_FILE_HOSTS` whitelist (`mega.nz`, `drive.google.com`, `mediafire.com`, `dropbox.com`, `pixeldrain.com`, `gofile.io`, `1fichier.com`, `yadi.sk`, `disk.yandex.com`) that are always accepted as destinations regardless of query parameters.
+  - Relaxed `intermediate_params` rejection: URLs with `?url=`, `?link=`, `?go=` are now only rejected if they point to the shortener family (`_SHORTENER_FAMILY`) OR have a very short path (`<=2 chars`) with no file extension and no known file host.
+- **Issue 3 (Robust userscript injection & @match isolation):**
+  - `GM_POLYFILL_JS` is strictly injected prior to community `.user.js` files.
+  - Wrapped each script injection in try/except with failure logging by script name.
+  - Added INFO-level logging of total script count and loaded filenames.
+  - Added origin check and `@match` pattern isolation in the script wrapper to ensure userscripts only execute on their intended hostnames (preventing cross-origin hijacking or redirect loops on internal error/about pages).
+  - Prevented recursive self-redirects on bypass tool origins (`bypass.vip`, `bypass.city`, `adbypass.org`).
+- **Issue 4 (Fallback resolver check & error propagation):**
+  - In `resolvers/fallback_resolver.py`, logs once at INFO level on startup when `FALLBACK_API_URL` is not configured.
+  - In `resolvers/orchestrator.py`, prevented `NoFallbackAPI` / `FallbackDisabled` from masking the real `browser_resolver` error; returns browser failure as primary, attaching fallback failure in `extra`.
+- **Issue 5 (Automated failure debugging):**
+  - In `resolvers/browser_resolver.py`, saves a full-page screenshot (`logs/fail_{domain}_{timestamp}.png`) and HTML dump (`logs/fail_{domain}_{timestamp}.html`) on failure and logs paths at WARNING level.
+  - Refined `_has_captcha()` to inspect visible challenge frames/containers rather than matching raw text strings in invisible scripts.
+
 ---
 
 ## 🔒 Security & Git Hygiene Standards
@@ -173,7 +179,7 @@ async def test():
         browser = await p.chromium.launch(headless=True)
         resolver = BrowserResolver(browser)
         result = await resolver.resolve('http://speedy-links.com/s?tQeV3k8s', 'speedy-links.com')
-        print('Result:', result.status, result.target_url)
+        print('Result:', result.status, result.target_url, result.method)
         await browser.close()
 
 asyncio.run(test())
